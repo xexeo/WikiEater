@@ -24,9 +24,9 @@ A lista inicial está em `wikieater/config.py` (`FILTERED_GAMES`) e é inserida 
 ## Uso
 
 ```bash
-python -m wikieater.cli --db /home/runner/work/WikiEater/WikiEater/wikieater.sqlite3 --wiki-dir /home/runner/work/WikiEater/WikiEater/wikis run --threads 2
-python -m wikieater.cli --db /home/runner/work/WikiEater/WikiEater/wikieater.sqlite3 status
-python -m wikieater.cli --db /home/runner/work/WikiEater/WikiEater/wikieater.sqlite3 logs --limit 100
+python -m wikieater.cli --db ./wikieater.sqlite3 --wiki-dir ./wikis run --threads 2
+python -m wikieater.cli --db ./wikieater.sqlite3 status
+python -m wikieater.cli --db ./wikieater.sqlite3 logs --limit 100
 ```
 
 ## Interface de controle

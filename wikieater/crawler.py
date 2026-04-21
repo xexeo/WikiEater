@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import signal
+import sqlite3
 import threading
 import time
 from datetime import datetime, timezone
@@ -16,6 +18,8 @@ from .config import DEFAULT_REQUEST_TIMEOUT, DEFAULT_SLEEP_SECONDS, FILTERED_GAM
 from .db import CrawlDB
 from .extractor import clean_and_extract, normalize_internal_url
 
+MAX_ERROR_LENGTH = 1000
+
 
 def _utcnow() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -23,8 +27,7 @@ def _utcnow() -> str:
 
 def _slug(value: str) -> str:
     safe = "".join(c if c.isalnum() else "_" for c in value).strip("_")
-    while "__" in safe:
-        safe = safe.replace("__", "_")
+    safe = re.sub(r"_+", "_", safe)
     return safe.lower()[:120] or "page"
 
 
@@ -33,7 +36,7 @@ def _build_file_path(base_dir: str, game_name: str, url: str) -> str:
     game_dir.mkdir(parents=True, exist_ok=True)
     parsed = urlparse(url)
     path_part = _slug(parsed.path or "index")
-    digest = hashlib.sha1(url.encode("utf-8")).hexdigest()[:10]
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()[:12]
     return str(game_dir / f"{path_part}_{digest}.html")
 
 
@@ -46,8 +49,6 @@ class RoundRobinScheduler:
         self._refresh_game_ids()
 
     def _refresh_game_ids(self):
-        import sqlite3
-
         conn = sqlite3.connect(self.db_path, timeout=30, isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
@@ -58,8 +59,6 @@ class RoundRobinScheduler:
             conn.close()
 
     def claim_next(self) -> dict[str, Any] | None:
-        import sqlite3
-
         with self.lock:
             if not self.game_ids:
                 return None
@@ -108,6 +107,9 @@ def _fetch_url(url: str, timeout: int) -> str:
 
 
 def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DEFAULT_REQUEST_TIMEOUT, sleep_seconds: float = DEFAULT_SLEEP_SECONDS):
+    if sleep_seconds < 0.1:
+        raise ValueError(f"sleep_seconds must be >= 0.1 to keep crawling polite, got {sleep_seconds}")
+
     db = CrawlDB(db_path)
     db.seed_games(FILTERED_GAMES)
     db.recover_in_progress()
@@ -124,8 +126,6 @@ def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DE
     scheduler = RoundRobinScheduler(db_path)
 
     def worker(worker_id: int):
-        import sqlite3
-
         conn = sqlite3.connect(db_path, timeout=30, isolation_level=None)
         conn.row_factory = sqlite3.Row
         try:
@@ -179,7 +179,7 @@ def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DE
                 except (URLError, TimeoutError, OSError, ValueError) as exc:
                     conn.execute(
                         "UPDATE pages SET status='failed', updated_at=?, last_error=? WHERE id=?",
-                        (_utcnow(), str(exc)[:1000], page_id),
+                        (_utcnow(), str(exc)[:MAX_ERROR_LENGTH], page_id),
                     )
                     conn.execute(
                         "INSERT INTO crawl_log(ts, level, game_id, url, message) "
@@ -187,7 +187,7 @@ def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DE
                         (_utcnow(), f"worker-{worker_id}: {exc}", page_id),
                     )
 
-                time.sleep(max(0.0, sleep_seconds))
+                time.sleep(sleep_seconds)
         finally:
             conn.close()
 
@@ -198,9 +198,7 @@ def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DE
 
     try:
         while not stop_event.is_set():
-            pending = sum(int(r["pending"] or 0) for r in db.stats())
-            in_progress = _in_progress_count(db_path)
-            if pending == 0 and in_progress == 0:
+            if db.remaining_count() == 0:
                 db.log("INFO", "Crawler completed all discovered pages")
                 stop_event.set()
                 break
@@ -209,25 +207,5 @@ def run_crawler(db_path: str, wiki_dir: str, threads: int = 2, timeout: int = DE
         for t in worker_threads:
             t.join(timeout=10)
         if stop_event.is_set():
-            _reset_in_progress(db_path)
+            db.recover_in_progress()
             db.log("INFO", "Crawler stopped and state persisted")
-
-
-def _in_progress_count(db_path: str) -> int:
-    import sqlite3
-
-    conn = sqlite3.connect(db_path)
-    try:
-        return conn.execute("SELECT COUNT(*) FROM pages WHERE status='in_progress'").fetchone()[0]
-    finally:
-        conn.close()
-
-
-def _reset_in_progress(db_path: str):
-    import sqlite3
-
-    conn = sqlite3.connect(db_path, isolation_level=None)
-    try:
-        conn.execute("UPDATE pages SET status='pending' WHERE status='in_progress'")
-    finally:
-        conn.close()

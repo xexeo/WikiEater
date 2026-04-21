@@ -1,8 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import os
-from pathlib import Path
 
 from .config import DEFAULT_DB_PATH, DEFAULT_THREADS, DEFAULT_WIKI_DIR, FILTERED_GAMES
 from .crawler import run_crawler
@@ -15,7 +13,7 @@ def _print_status(db: CrawlDB):
     for r in rows:
         identified = int(r["identified"] or 0)
         downloaded = int(r["downloaded"] or 0)
-        completion = f"{(downloaded / identified * 100):.2f}%" if identified else "0.00%"
+        completion = f"{(downloaded / identified * 100):.2f}%" if identified > 0 else "--"
         print(
             f"{r['name']} | {r['wiki_url']} | {identified} | {downloaded} | "
             f"{int(r['pending'] or 0)} | {int(r['failed'] or 0)} | {completion}"
@@ -46,7 +44,6 @@ def main():
     logs_parser.add_argument("--limit", type=int, default=50)
 
     args = parser.parse_args()
-    Path(os.path.dirname(os.path.abspath(args.db)) or ".").mkdir(parents=True, exist_ok=True)
     db = CrawlDB(args.db)
     db.seed_games(FILTERED_GAMES)
 

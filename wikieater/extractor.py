@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import re
 from html.parser import HTMLParser
 from urllib.parse import urljoin, urlparse, urlunparse
 
@@ -21,9 +22,12 @@ class WikiHTMLProcessor(HTMLParser):
         self.categories: set[str] = set()
         self.output: list[str] = []
         self.block_depth = 0
+        self.blocked_tags: list[str] = []
 
     def _blocked_attrs(self, attrs: dict[str, str]) -> bool:
-        class_tokens = set((attrs.get("class", "") + " " + attrs.get("id", "")).lower().replace("-", " ").split())
+        combined_attrs = f"{attrs.get('class', '')} {attrs.get('id', '')}"
+        normalized_attrs = combined_attrs.lower().replace("-", " ")
+        class_tokens = set(normalized_attrs.split())
         return bool(class_tokens & BLOCKED_CLASS_TOKENS)
 
     def handle_starttag(self, tag: str, attrs_list):
@@ -32,11 +36,13 @@ class WikiHTMLProcessor(HTMLParser):
         href = attrs.get("href")
         if tag == "a" and href:
             self.links.add(href)
-            if "Category:" in href or "category:" in href:
-                self.categories.add(href.split("Category:", 1)[-1].replace("_", " "))
+            match = re.search(r"category:(.+)", href, flags=re.IGNORECASE)
+            if match:
+                self.categories.add(match.group(1).replace("_", " "))
 
         if tag in BLOCKED_TAGS or self._blocked_attrs(attrs):
             self.block_depth += 1
+            self.blocked_tags.append(tag)
             return
 
         if self.block_depth > 0 or tag not in ALLOWED_TAGS:
@@ -54,7 +60,9 @@ class WikiHTMLProcessor(HTMLParser):
 
     def handle_endtag(self, tag: str):
         if self.block_depth > 0:
-            self.block_depth -= 1
+            if self.blocked_tags and tag == self.blocked_tags[-1]:
+                self.blocked_tags.pop()
+                self.block_depth -= 1
             return
         if tag in ALLOWED_TAGS:
             self.output.append(f"</{tag}>")
@@ -78,8 +86,7 @@ def normalize_internal_url(base_url: str, link: str) -> str | None:
     if parsed.path.startswith("/wiki/Special:") or parsed.path.startswith("/wiki/File:"):
         return None
 
-    normalized = parsed._replace(fragment="", query="")
-    return urlunparse(normalized)
+    return urlunparse((parsed.scheme, parsed.netloc, parsed.path, parsed.params, "", ""))
 
 
 def clean_and_extract(html_text: str, page_url: str) -> tuple[str, set[str]]:

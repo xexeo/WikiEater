@@ -136,3 +136,10 @@ class CrawlDB:
                 "SELECT ts, level, game_id, url, message FROM crawl_log ORDER BY id DESC LIMIT ?",
                 (limit,),
             ).fetchall()
+
+    def remaining_count(self) -> int:
+        with self.connect() as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) AS total FROM pages WHERE status IN ('pending', 'in_progress')"
+            ).fetchone()
+            return int(row["total"] if row else 0)

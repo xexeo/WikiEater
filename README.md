@@ -33,6 +33,8 @@ O programa atualmente oferece:
 - Normalização de URLs para reduzir duplicatas.
 - Deduplicação por URL canônica dentro de cada wiki.
 - Catálogo de jogos e seeds carregados de `crawler_config.json`.
+- Uso preferencial apenas das seeds curadas em `seed_paths`, evitando depender da página principal da wiki quando ela não é um bom ponto de entrada.
+- Suporte a múltiplas fontes de wiki por jogo via `wiki_options`, com fallback automático para a próxima opção quando a fonte ativa falha sem recuperar nenhuma página.
 - Descoberta automática de links internos a partir das páginas baixadas.
 - Restrição de descoberta para links do mesmo host da wiki atual.
 - Filtro conservador para evitar áreas como login, perfil, edição, histórico e páginas administrativas.
@@ -59,6 +61,34 @@ O programa atualmente oferece:
 - `crawler_tk.py`: aplicação completa (UI + crawler + persistência).
 - `crawler_config.json`: configuração runtime e catálogo de jogos.
 - `crawler_state.sqlite3`: estado persistido da execução.
+
+## Fontes alternativas por jogo
+
+Cada jogo pode continuar usando o formato antigo com `wiki_url` + `seed_paths`, mas agora o formato recomendado aceita uma lista ordenada em `wiki_options`:
+
+```json
+{
+  "name": "Exemplo",
+  "genre": "RPG",
+  "wiki_options": [
+    {
+      "wiki_url": "https://primeira-wiki.example/wiki/Main_Page",
+      "seed_paths": ["/wiki/Items", "/wiki/Classes"]
+    },
+    {
+      "wiki_url": "https://segunda-wiki.example/wiki/Main_Page",
+      "seed_paths": ["/wiki/Items", "/wiki/Classes"]
+    }
+  ]
+}
+```
+
+Com esse formato:
+
+- a primeira entrada é a wiki principal do jogo;
+- se essa fonte ativa esgotar a fila sem obter nenhuma página `fetched`, o crawler promove automaticamente a próxima opção;
+- a coluna `wiki` da UI passa a mostrar a fonte atualmente ativa para aquele jogo;
+- o formato antigo continua aceito por retrocompatibilidade.
 
 ## Executar
 

@@ -89,6 +89,32 @@ def canonicalize_url(url: str) -> str:
     return urlunparse((scheme, netloc, path, "", query, ""))
 
 
+def get_game_sources(game_cfg: Dict) -> List[Dict[str, object]]:
+    """Normaliza uma entrada de jogo para uma lista ordenada de fontes de wiki."""
+    raw_sources = game_cfg.get("wiki_options")
+    if raw_sources:
+        sources = []
+        for idx, src in enumerate(raw_sources):
+            wiki_url = str(src["wiki_url"])
+            seed_paths = list(src.get("seed_paths", []))
+            sources.append(
+                {
+                    "priority": idx,
+                    "wiki_url": wiki_url,
+                    "seed_paths": seed_paths,
+                }
+            )
+        return sources
+
+    return [
+        {
+            "priority": 0,
+            "wiki_url": str(game_cfg["wiki_url"]),
+            "seed_paths": list(game_cfg.get("seed_paths", [])),
+        }
+    ]
+
+
 def same_host(base_url: str, candidate_url: str) -> bool:
     """Valida se link descoberto pertence ao mesmo host da wiki."""
     return urlparse(base_url).netloc.lower() == urlparse(candidate_url).netloc.lower()
@@ -257,7 +283,18 @@ class DB:
                     name TEXT NOT NULL,
                     slug TEXT NOT NULL UNIQUE,
                     genre TEXT NOT NULL,
-                    base_url TEXT NOT NULL
+                    base_url TEXT NOT NULL,
+                    active_source_priority INTEGER NOT NULL DEFAULT 0
+                );
+
+                CREATE TABLE IF NOT EXISTS wiki_sources (
+                    id INTEGER PRIMARY KEY,
+                    game_id INTEGER NOT NULL,
+                    priority INTEGER NOT NULL,
+                    wiki_url TEXT NOT NULL,
+                    UNIQUE(game_id, priority),
+                    UNIQUE(game_id, wiki_url),
+                    FOREIGN KEY(game_id) REFERENCES games(id)
                 );
 
                 CREATE TABLE IF NOT EXISTS urls (
@@ -305,36 +342,108 @@ class DB:
             columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(urls)")}
             if "failure_count" not in columns:
                 self.conn.execute("ALTER TABLE urls ADD COLUMN failure_count INTEGER NOT NULL DEFAULT 0")
+            if "source_id" not in columns:
+                self.conn.execute("ALTER TABLE urls ADD COLUMN source_id INTEGER")
+            if "js_render_attempted" not in columns:
+                self.conn.execute("ALTER TABLE urls ADD COLUMN js_render_attempted INTEGER NOT NULL DEFAULT 0")
+
+            game_columns = {row["name"] for row in self.conn.execute("PRAGMA table_info(games)")}
+            if "active_source_priority" not in game_columns:
+                self.conn.execute("ALTER TABLE games ADD COLUMN active_source_priority INTEGER NOT NULL DEFAULT 0")
 
     def upsert_games_and_seeds(self, games: List[Dict]) -> None:
         """Registra jogos e seeds iniciais sem duplicar URLs."""
         with self.lock, self.conn:
             for g in games:
                 slug = slugify(g["name"])
+                sources = get_game_sources(g)
+                primary_source = sources[0]
                 self.conn.execute(
                     """
-                    INSERT INTO games(name, slug, genre, base_url)
-                    VALUES(?, ?, ?, ?)
+                    INSERT INTO games(name, slug, genre, base_url, active_source_priority)
+                    VALUES(?, ?, ?, ?, 0)
                     ON CONFLICT(slug) DO UPDATE SET
                         name=excluded.name,
-                        genre=excluded.genre,
-                        base_url=excluded.base_url
+                        genre=excluded.genre
                     """,
-                    (g["name"], slug, g["genre"], g["wiki_url"]),
+                    (g["name"], slug, g["genre"], primary_source["wiki_url"]),
                 )
-                gid = self.conn.execute("SELECT id FROM games WHERE slug=?", (slug,)).fetchone()["id"]
+                game_row = self.conn.execute(
+                    "SELECT id, base_url, active_source_priority FROM games WHERE slug=?",
+                    (slug,),
+                ).fetchone()
+                gid = int(game_row["id"])
 
-                seeds = [g["wiki_url"]] + g.get("seed_paths", [])
-                for s in seeds:
-                    full = s if s.startswith("http") else urljoin(g["wiki_url"], s)
-                    canon = canonicalize_url(full)
+                for source in sources:
                     self.conn.execute(
                         """
-                        INSERT OR IGNORE INTO urls(game_id, url, url_canonical, status, depth, first_seen_at)
-                        VALUES(?, ?, ?, 'queued', 0, ?)
+                        INSERT INTO wiki_sources(game_id, priority, wiki_url)
+                        VALUES(?, ?, ?)
+                        ON CONFLICT(game_id, priority) DO UPDATE SET wiki_url=excluded.wiki_url
                         """,
-                        (gid, full, canon, now_iso()),
+                        (gid, int(source["priority"]), str(source["wiki_url"])),
                     )
+
+                source_rows = list(
+                    self.conn.execute(
+                        "SELECT id, priority, wiki_url FROM wiki_sources WHERE game_id=? ORDER BY priority",
+                        (gid,),
+                    )
+                )
+                source_by_priority = {int(row["priority"]): row for row in source_rows}
+
+                active_priority = int(game_row["active_source_priority"] or 0)
+                if active_priority not in source_by_priority:
+                    active_priority = 0
+                    self.conn.execute(
+                        "UPDATE games SET active_source_priority=?, base_url=? WHERE id=?",
+                        (active_priority, str(primary_source["wiki_url"]), gid),
+                    )
+
+                active_source = source_by_priority[active_priority]
+                seeded_source_ids = {
+                    int(row["source_id"])
+                    for row in self.conn.execute(
+                        "SELECT DISTINCT source_id FROM urls WHERE game_id=? AND source_id IS NOT NULL",
+                        (gid,),
+                    ).fetchall()
+                }
+
+                for source in sources:
+                    priority = int(source["priority"])
+                    source_row = source_by_priority[priority]
+                    should_seed = int(source_row["id"]) in seeded_source_ids or priority == active_priority
+                    if not should_seed:
+                        continue
+                    self._seed_source_locked(gid, int(source_row["id"]), str(source_row["wiki_url"]), list(source["seed_paths"]))
+
+                self.conn.execute(
+                    """
+                    UPDATE urls
+                    SET source_id=?
+                    WHERE game_id=? AND source_id IS NULL
+                    """,
+                    (int(active_source["id"]), gid),
+                )
+
+    def _seed_source_locked(self, game_id: int, source_id: int, wiki_url: str, seed_paths: List[str]) -> int:
+        """Insere seeds da fonte ativa de uma wiki mantendo a operação idempotente."""
+        seeds = list(seed_paths) if seed_paths else [wiki_url]
+        inserted = 0
+        for seed in seeds:
+            full = seed if str(seed).startswith("http") else urljoin(wiki_url, str(seed))
+            canon = canonicalize_url(full)
+            before = self.conn.total_changes
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO urls(game_id, source_id, url, url_canonical, status, depth, first_seen_at)
+                VALUES(?, ?, ?, ?, 'queued', 0, ?)
+                """,
+                (game_id, source_id, full, canon, now_iso()),
+            )
+            if self.conn.total_changes > before:
+                inserted += 1
+        return inserted
 
     def has_seed_data(self) -> bool:
         """Indica se a base já possui jogos e URLs suficientes para iniciar o crawl."""
@@ -347,6 +456,24 @@ class DB:
         """Retorna o catálogo de jogos ordenado para consumo pela UI e pelos workers."""
         with self.lock:
             return list(self.conn.execute("SELECT * FROM games ORDER BY name"))
+
+    def get_game_row(self, game_id: int) -> Optional[sqlite3.Row]:
+        """Recupera um único jogo, incluindo a fonte de wiki atualmente ativa."""
+        with self.lock:
+            return self.conn.execute("SELECT * FROM games WHERE id=?", (game_id,)).fetchone()
+
+    def get_source_row(self, source_id: int) -> Optional[sqlite3.Row]:
+        """Recupera os metadados da fonte de wiki associada à URL atual."""
+        with self.lock:
+            return self.conn.execute("SELECT * FROM wiki_sources WHERE id=?", (source_id,)).fetchone()
+
+    def get_source_for_game_priority(self, game_id: int, priority: int) -> Optional[sqlite3.Row]:
+        """Busca a fonte de wiki de um jogo pelo índice de prioridade configurado."""
+        with self.lock:
+            return self.conn.execute(
+                "SELECT * FROM wiki_sources WHERE game_id=? AND priority=?",
+                (game_id, priority),
+            ).fetchone()
 
     def get_game_ids_with_queued_urls(self) -> List[int]:
         """Retorna os jogos que ainda possuem fila pendente para o scheduler."""
@@ -417,6 +544,93 @@ class DB:
                     return self.conn.execute("SELECT * FROM urls WHERE id=?", (row["id"],)).fetchone()
             return None
 
+    def promote_next_source_if_needed(self, game_id: int, source_id: int, game_cfg: Dict) -> Optional[sqlite3.Row]:
+        """
+        Promove a próxima wiki configurada quando a atual esgota a fila sem recuperar nenhuma página.
+
+        A promoção só acontece para a fonte ativa do jogo e apenas quando ela não possui
+        URLs `queued`, `fetching` ou `fetched`.
+        """
+        with self.lock, self.conn:
+            source_row = self.conn.execute(
+                "SELECT id, priority, wiki_url FROM wiki_sources WHERE id=? AND game_id=?",
+                (source_id, game_id),
+            ).fetchone()
+            game_row = self.conn.execute(
+                "SELECT id, active_source_priority FROM games WHERE id=?",
+                (game_id,),
+            ).fetchone()
+            if not source_row or not game_row:
+                return None
+
+            current_priority = int(source_row["priority"])
+            if int(game_row["active_source_priority"] or 0) != current_priority:
+                return None
+
+            counts = self.conn.execute(
+                """
+                SELECT
+                    SUM(CASE WHEN status='queued' THEN 1 ELSE 0 END) AS queued,
+                    SUM(CASE WHEN status='fetching' THEN 1 ELSE 0 END) AS fetching,
+                    SUM(CASE WHEN status='fetched' THEN 1 ELSE 0 END) AS fetched
+                FROM urls
+                WHERE game_id=? AND source_id=?
+                """,
+                (game_id, source_id),
+            ).fetchone()
+            if int(counts["queued"] or 0) or int(counts["fetching"] or 0) or int(counts["fetched"] or 0):
+                return None
+
+            configured_sources = get_game_sources(game_cfg)
+            next_priority = current_priority + 1
+            if next_priority >= len(configured_sources):
+                return None
+
+            next_cfg = configured_sources[next_priority]
+            self.conn.execute(
+                """
+                INSERT INTO wiki_sources(game_id, priority, wiki_url)
+                VALUES(?, ?, ?)
+                ON CONFLICT(game_id, priority) DO UPDATE SET wiki_url=excluded.wiki_url
+                """,
+                (game_id, next_priority, str(next_cfg["wiki_url"])),
+            )
+            next_source = self.conn.execute(
+                "SELECT id, priority, wiki_url FROM wiki_sources WHERE game_id=? AND priority=?",
+                (game_id, next_priority),
+            ).fetchone()
+            self.conn.execute(
+                "UPDATE games SET active_source_priority=?, base_url=? WHERE id=?",
+                (next_priority, str(next_source["wiki_url"]), game_id),
+            )
+            inserted = self._seed_source_locked(
+                game_id,
+                int(next_source["id"]),
+                str(next_source["wiki_url"]),
+                list(next_cfg["seed_paths"]),
+            )
+            if not inserted:
+                return None
+            return next_source
+
+    def promote_exhausted_games(self, games: List[Dict]) -> List[Tuple[str, str]]:
+        """Varre o catálogo e promove jogos cuja wiki ativa morreu antes de produzir resultados."""
+        promotions: List[Tuple[str, str]] = []
+        with self.lock:
+            game_rows = list(self.conn.execute("SELECT id, name, slug, active_source_priority FROM games ORDER BY name"))
+        config_by_slug = {slugify(game["name"]): game for game in games}
+        for row in game_rows:
+            game_cfg = config_by_slug.get(str(row["slug"]))
+            if not game_cfg:
+                continue
+            active_source = self.get_source_for_game_priority(int(row["id"]), int(row["active_source_priority"] or 0))
+            if not active_source:
+                continue
+            promoted = self.promote_next_source_if_needed(int(row["id"]), int(active_source["id"]), game_cfg)
+            if promoted:
+                promotions.append((str(row["name"]), str(promoted["wiki_url"])))
+        return promotions
+
     def mark_fetched(self, url_id: int, http_status: int, file_path: str, robots_allowed: bool) -> None:
         """Marca uma URL como concluída e registra o HTML salvo em disco."""
         with self.lock, self.conn:
@@ -462,6 +676,11 @@ class DB:
             )
             return next_status
 
+    def mark_js_render_attempted(self, url_id: int) -> None:
+        """Marca que a URL já consumiu uma tentativa de fallback JS nesta base."""
+        with self.lock, self.conn:
+            self.conn.execute("UPDATE urls SET js_render_attempted=1 WHERE id=?", (url_id,))
+
     def requeue_robot_blocked_urls(self) -> int:
         """Devolve à fila URLs bloqueadas por robots quando o bypass é ativado."""
         with self.lock, self.conn:
@@ -469,7 +688,15 @@ class DB:
                 """
                 UPDATE urls
                 SET status='queued', error=NULL
-                WHERE status='blocked' OR (status='failed' AND error='blocked by robots.txt')
+                WHERE (status='blocked' OR (status='failed' AND error='blocked by robots.txt'))
+                  AND (
+                    source_id IS NULL OR EXISTS (
+                        SELECT 1
+                        FROM games g
+                        JOIN wiki_sources ws ON ws.game_id = g.id AND ws.priority = g.active_source_priority
+                        WHERE g.id = urls.game_id AND ws.id = urls.source_id
+                    )
+                  )
                 """
             )
             return int(result.rowcount or 0)
@@ -482,25 +709,34 @@ class DB:
                 UPDATE urls
                 SET status='queued'
                 WHERE status='failed' AND failure_count < ?
+                  AND (
+                    source_id IS NULL OR EXISTS (
+                        SELECT 1
+                        FROM games g
+                        JOIN wiki_sources ws ON ws.game_id = g.id AND ws.priority = g.active_source_priority
+                        WHERE g.id = urls.game_id AND ws.id = urls.source_id
+                    )
+                  )
                 """,
                 (max(1, max_failures),),
             )
             return int(result.rowcount or 0)
 
-    def insert_discovered_links(self, from_url_id: int, game_id: int, urls: List[Tuple[str, int]]) -> None:
+    def insert_discovered_links(self, from_url_id: int, game_id: int, source_id: int, urls: List[Tuple[str, int]]) -> None:
         """Insere URLs descobertas e relacionamentos sem duplicação."""
         with self.lock, self.conn:
             for u, depth in urls:
                 canon = canonicalize_url(u)
                 self.conn.execute(
                     """
-                    INSERT OR IGNORE INTO urls(game_id, url, url_canonical, status, depth, first_seen_at)
-                    VALUES(?, ?, ?, 'queued', ?, ?)
+                    INSERT OR IGNORE INTO urls(game_id, source_id, url, url_canonical, status, depth, first_seen_at)
+                    VALUES(?, ?, ?, ?, 'queued', ?, ?)
                     """,
-                    (game_id, u, canon, depth, now_iso()),
+                    (game_id, source_id, u, canon, depth, now_iso()),
                 )
                 to_row = self.conn.execute(
-                    "SELECT id FROM urls WHERE game_id=? AND url_canonical=?", (game_id, canon)
+                    "SELECT id FROM urls WHERE game_id=? AND source_id=? AND url_canonical=?",
+                    (game_id, source_id, canon),
                 ).fetchone()
                 if to_row:
                     self.conn.execute(
@@ -508,7 +744,7 @@ class DB:
                         (from_url_id, to_row["id"]),
                     )
 
-    def get_local_link_targets(self, game_id: int, urls: List[str]) -> Dict[str, str]:
+    def get_local_link_targets(self, source_id: int, urls: List[str]) -> Dict[str, str]:
         """Resolve URLs canônicas para caminhos locais relativos dentro do backup."""
         if not urls:
             return {}
@@ -520,9 +756,9 @@ class DB:
                 f"""
                 SELECT url_canonical, id
                 FROM urls
-                WHERE game_id=? AND url_canonical IN ({placeholders})
+                WHERE source_id=? AND url_canonical IN ({placeholders})
                 """,
-                [game_id, *unique_urls],
+                [source_id, *unique_urls],
             ).fetchall()
         return {str(row["url_canonical"]): f"{int(row['id'])}.html" for row in rows}
 
@@ -546,7 +782,8 @@ class DB:
                         SUM(CASE WHEN u.status='failed' THEN 1 ELSE 0 END) AS failed,
                         COUNT(u.id) AS discovered
                     FROM games g
-                    LEFT JOIN urls u ON u.game_id = g.id
+                    LEFT JOIN wiki_sources ws ON ws.game_id = g.id AND ws.priority = g.active_source_priority
+                    LEFT JOIN urls u ON u.game_id = g.id AND (u.source_id = ws.id OR (u.source_id IS NULL AND ws.id IS NULL))
                     GROUP BY g.id, g.name, g.slug, g.base_url
                     ORDER BY g.name
                     """
@@ -641,9 +878,7 @@ class CrawlerEngine:
         # Cache local de robots para evitar refetch.
         self.robots_cache: Dict[str, RobotFileParser] = {}
         self.robots_lock = threading.Lock()
-        self.js_render_lock = threading.Lock()
-        self.playwright = None
-        self.browser = None
+        self.render_main_selectors = ["main", "#mw-content-text", ".mw-parser-output", "article", "#content"]
 
     def log(self, msg: str) -> None:
         """Envia mensagens para a fila da UI sem acessar widgets entre threads."""
@@ -680,11 +915,15 @@ class CrawlerEngine:
         self.stop_event.set()
         self.pause_event.set()
         self.log("Encerrando crawler de forma graciosa...")
+        join_timeout = max(
+            self.cfg.runtime.request_timeout_s,
+            self.cfg.runtime.js_render_timeout_s if self.cfg.runtime.render_js_content else 0,
+        ) + 5
         with self.workers_lock:
             for ev in self.worker_stop_flags:
                 ev.set()
             for w in self.workers:
-                w.join(timeout=5)
+                w.join(timeout=join_timeout)
             self.workers.clear()
             self.worker_stop_flags.clear()
         self._close_js_renderer()
@@ -727,7 +966,7 @@ class CrawlerEngine:
 
             for idx in range(current, target):
                 ev = threading.Event()
-                t = threading.Thread(target=self._worker_loop, args=(ev,), name=f"worker-{idx+1}", daemon=True)
+                t = threading.Thread(target=self._worker_loop, args=(ev,), name=f"worker-{idx+1}", daemon=False)
                 t.start()
                 self.workers.append(t)
                 self.worker_stop_flags.append(ev)
@@ -751,32 +990,44 @@ class CrawlerEngine:
             self.rr_index = 0
             return None
 
-    def _ensure_js_renderer(self):
-        """Inicializa Playwright sob demanda para o fallback de conteúdo JS."""
+    def _get_game_config(self, game_slug: str) -> Dict:
+        """Localiza a entrada de configuração de um jogo pelo slug estável."""
+        for game in self.cfg.data["games"]:
+            if slugify(game["name"]) == game_slug:
+                return game
+        return {"name": game_slug, "wiki_url": "", "seed_paths": [], "wiki_options": []}
+
+    def _ensure_worker_js_renderer(self, worker_state: Dict[str, object]):
+        """Cria lazily uma instância de browser restrita ao thread do worker."""
         if sync_playwright is None:
             raise RuntimeError("Playwright não está instalado.")
-        if self.browser is not None:
-            return self.browser
+        if worker_state.get("playwright") and worker_state.get("browser"):
+            return worker_state["playwright"], worker_state["browser"]
 
-        self.playwright = sync_playwright().start()
-        self.browser = self.playwright.chromium.launch(headless=True)
-        return self.browser
+        playwright = sync_playwright().start()
+        browser = playwright.chromium.launch(headless=True)
+        worker_state["playwright"] = playwright
+        worker_state["browser"] = browser
+        return playwright, browser
+
+    def _close_worker_js_renderer(self, worker_state: Dict[str, object]) -> None:
+        """Fecha o browser do worker no mesmo thread que o criou."""
+        browser = worker_state.pop("browser", None)
+        playwright = worker_state.pop("playwright", None)
+        if browser is not None:
+            try:
+                browser.close()
+            except Exception:
+                pass
+        if playwright is not None:
+            try:
+                playwright.stop()
+            except Exception:
+                pass
 
     def _close_js_renderer(self) -> None:
-        """Fecha o navegador do fallback JS, se ele tiver sido criado."""
-        with self.js_render_lock:
-            if self.browser is not None:
-                try:
-                    self.browser.close()
-                except Exception:
-                    pass
-                self.browser = None
-            if self.playwright is not None:
-                try:
-                    self.playwright.stop()
-                except Exception:
-                    pass
-                self.playwright = None
+        """Mantido por compatibilidade; o fallback JS agora é fechado por chamada."""
+        return None
 
     def _robots_allowed(self, base_url: str, target_url: str) -> bool:
         """
@@ -812,46 +1063,50 @@ class CrawlerEngine:
         text = html.unescape(text)
         return re.sub(r"\s+", " ", text).strip()
 
-    def _should_render_js(self, raw_html: str, clean_html: str, links: List[str]) -> bool:
+    def _should_render_js(self, raw_html: str, clean_html: str, links: List[str], js_render_attempted: bool) -> bool:
         """Decide se vale tentar renderização JS quando o HTML inicial parece incompleto."""
-        if not self.cfg.runtime.render_js_content:
+        if not self.cfg.runtime.render_js_content or js_render_attempted:
             return False
 
-        text_length = len(self._extract_visible_text(clean_html))
+        text_content = self._extract_visible_text(clean_html)
+        text_length = len(text_content)
         js_markers = (
             "__NEXT_DATA__",
             'id="__next"',
-            "application/ld+json",
             "window.__",
             "data-reactroot",
+            "webpack",
+            "__NUXT__",
         )
         has_js_markers = any(marker in raw_html for marker in js_markers)
-        has_main_region = bool(re.search(r"<(main|article|table|p|h1|h2)\b", clean_html, flags=re.I))
-        return (text_length < 800 and len(links) < 8) or (has_js_markers and not has_main_region)
+        has_main_region = bool(re.search(r"<(main|article|table|p|h1|h2|ul|ol)\b", clean_html, flags=re.I))
+        has_structured_content = bool(re.search(r"<(table|ul|ol|dl|section|h1|h2|h3)\b", clean_html, flags=re.I))
+        very_sparse_content = text_length < 250 and len(links) < 4
+        suspicious_shell = has_js_markers and text_length < 600 and not has_structured_content
+        return not has_main_region and (very_sparse_content or suspicious_shell)
 
-    def _render_js_content(self, url: str) -> str:
+    def _render_js_content(self, url: str, worker_state: Dict[str, object]) -> str:
         """Renderiza a página com Playwright e retorna só a região principal quando possível."""
-        selectors = ["main", "#mw-content-text", ".mw-parser-output", "article", "#content"]
-        with self.js_render_lock:
-            browser = self._ensure_js_renderer()
-            page = browser.new_page(user_agent=self.cfg.runtime.user_agent)
-            try:
-                page.goto(
-                    url,
-                    wait_until="domcontentloaded",
-                    timeout=self.cfg.runtime.js_render_timeout_s * 1000,
-                )
-                page.wait_for_load_state("networkidle", timeout=self.cfg.runtime.js_render_timeout_s * 1000)
-                for selector in selectors:
+        _, browser = self._ensure_worker_js_renderer(worker_state)
+        selector_timeout_ms = min(self.cfg.runtime.js_render_timeout_s, 5) * 1000
+        page = browser.new_page(user_agent=self.cfg.runtime.user_agent)
+        try:
+            page.goto(
+                url,
+                wait_until="domcontentloaded",
+                timeout=self.cfg.runtime.js_render_timeout_s * 1000,
+            )
+            for selector in self.render_main_selectors:
+                try:
+                    page.wait_for_selector(selector, timeout=selector_timeout_ms, state="attached")
                     locator = page.locator(selector).first
                     if locator.count():
-                        try:
-                            return locator.evaluate("element => element.outerHTML")
-                        except Exception:
-                            continue
-                return page.content()
-            finally:
-                page.close()
+                        return locator.evaluate("element => element.outerHTML")
+                except Exception:
+                    continue
+            return page.content()
+        finally:
+            page.close()
 
     def _clean_html_and_extract(self, raw_html: str, base_url: str) -> Tuple[str, List[str], List[str]]:
         """
@@ -909,7 +1164,7 @@ class CrawlerEngine:
         main_html = html.unescape(main_html)
         return main_html, tags, discovered
 
-    def _rewrite_links_for_local_navigation(self, clean_html: str, base_url: str, game_id: int) -> str:
+    def _rewrite_links_for_local_navigation(self, clean_html: str, base_url: str, source_id: int) -> str:
         """Reescreve links da wiki para navegação local relativa entre arquivos salvos."""
         href_pattern = re.compile(r'(?P<prefix>\bhref\s*=\s*)(?P<quote>["\'])(?P<href>.*?)(?P=quote)', flags=re.I)
 
@@ -919,7 +1174,7 @@ class CrawlerEngine:
             for href in hrefs
             if href and not href.startswith(("#", "javascript:", "mailto:", "tel:"))
         ]
-        local_targets = self.db.get_local_link_targets(game_id, canonical_candidates)
+        local_targets = self.db.get_local_link_targets(source_id, canonical_candidates)
 
         def replace_href(match: re.Match) -> str:
             href = match.group("href")
@@ -949,6 +1204,7 @@ class CrawlerEngine:
 
     def _worker_loop(self, local_stop_event: threading.Event) -> None:
         """Executa o ciclo fetch-processa-persiste de cada worker."""
+        worker_state: Dict[str, object] = {}
         while not self.stop_event.is_set() and not local_stop_event.is_set():
             # Pausa cooperativa
             self.pause_event.wait(timeout=0.5)
@@ -961,26 +1217,30 @@ class CrawlerEngine:
                 continue
 
             game_id = int(task["game_id"])
+            source_id = int(task["source_id"]) if task["source_id"] is not None else 0
             url_id = int(task["id"])
             url = task["url_canonical"]
             depth = int(task["depth"])
 
-            game_row = None
-            for g in self.db.get_game_rows():
-                if int(g["id"]) == game_id:
-                    game_row = g
-                    break
+            game_row = self.db.get_game_row(game_id)
             if not game_row:
                 self.db.register_failure(url_id, "game not found", self.cfg.runtime.max_failures)
                 continue
+            source_row = self.db.get_source_row(source_id) if source_id else None
+            if not source_row:
+                self.db.register_failure(url_id, "source not found", self.cfg.runtime.max_failures)
+                continue
 
-            base_url = game_row["base_url"]
+            base_url = source_row["wiki_url"]
             game_slug = game_row["slug"]
 
             robots_allowed = self._robots_allowed(base_url, url)
             if not robots_allowed:
                 self.db.mark_blocked(url_id)
                 self.log(f"BLOQUEADO por robots: {url}")
+                promoted = self.db.promote_next_source_if_needed(game_id, source_id, self._get_game_config(game_slug))
+                if promoted:
+                    self.log(f"[FALLBACK] {game_row['name']} mudou para {promoted['wiki_url']}")
                 continue
 
             try:
@@ -994,14 +1254,20 @@ class CrawlerEngine:
                 text = body.decode(charset, errors="replace")
 
                 if status >= 400:
-                    self.db.register_failure(url_id, f"http {status}", self.cfg.runtime.max_failures, status)
+                    next_status = self.db.register_failure(url_id, f"http {status}", self.cfg.runtime.max_failures, status)
                     self.log(f"Falha HTTP {status}: {url}")
+                    if next_status == "failed":
+                        promoted = self.db.promote_next_source_if_needed(game_id, source_id, self._get_game_config(game_slug))
+                        if promoted:
+                            self.log(f"[FALLBACK] {game_row['name']} mudou para {promoted['wiki_url']}")
                     continue
 
                 clean_html, tags, links = self._clean_html_and_extract(text, base_url)
-                if self._should_render_js(text, clean_html, links):
+                js_render_attempted = bool(task["js_render_attempted"])
+                if self._should_render_js(text, clean_html, links, js_render_attempted):
+                    self.db.mark_js_render_attempted(url_id)
                     try:
-                        rendered_html = self._render_js_content(url)
+                        rendered_html = self._render_js_content(url, worker_state)
                         rendered_clean_html, rendered_tags, rendered_links = self._clean_html_and_extract(
                             rendered_html, base_url
                         )
@@ -1015,23 +1281,35 @@ class CrawlerEngine:
                     except Exception as render_error:
                         self.log(f"Fallback JS indisponÃ­vel em {url}: {render_error}")
                 next_links = [(u, depth + 1) for u in links]
-                self.db.insert_discovered_links(url_id, game_id, next_links)
+                self.db.insert_discovered_links(url_id, game_id, source_id, next_links)
                 self.db.insert_tags(url_id, tags)
-                clean_html = self._rewrite_links_for_local_navigation(clean_html, base_url, game_id)
+                clean_html = self._rewrite_links_for_local_navigation(clean_html, base_url, source_id)
                 saved = self._save_html(game_slug, url_id, clean_html)
                 self.db.mark_fetched(url_id, status, saved, robots_allowed)
 
                 self.log(f"OK {url} -> {saved} | links={len(next_links)} tags={len(tags)}")
             except HTTPError as e:
-                self.db.register_failure(url_id, f"http {e.code}", self.cfg.runtime.max_failures, int(e.code))
+                next_status = self.db.register_failure(url_id, f"http {e.code}", self.cfg.runtime.max_failures, int(e.code))
                 self.log(f"Erro HTTP {e.code}: {url}")
+                if next_status == "failed":
+                    promoted = self.db.promote_next_source_if_needed(game_id, source_id, self._get_game_config(game_slug))
+                    if promoted:
+                        self.log(f"[FALLBACK] {game_row['name']} mudou para {promoted['wiki_url']}")
             except URLError as e:
-                self.db.register_failure(url_id, f"urlerror {e.reason}", self.cfg.runtime.max_failures)
+                next_status = self.db.register_failure(url_id, f"urlerror {e.reason}", self.cfg.runtime.max_failures)
                 self.log(f"Erro de rede: {url} | {e.reason}")
+                if next_status == "failed":
+                    promoted = self.db.promote_next_source_if_needed(game_id, source_id, self._get_game_config(game_slug))
+                    if promoted:
+                        self.log(f"[FALLBACK] {game_row['name']} mudou para {promoted['wiki_url']}")
             except Exception as e:
-                self.db.register_failure(url_id, str(e), self.cfg.runtime.max_failures)
+                next_status = self.db.register_failure(url_id, str(e), self.cfg.runtime.max_failures)
                 self.log(f"Erro: {url} | {e}")
-
+                if next_status == "failed":
+                    promoted = self.db.promote_next_source_if_needed(game_id, source_id, self._get_game_config(game_slug))
+                    if promoted:
+                        self.log(f"[FALLBACK] {game_row['name']} mudou para {promoted['wiki_url']}")
+        self._close_worker_js_renderer(worker_state)
 
 # ------------------------------
 # Interface Tkinter
@@ -1136,8 +1414,14 @@ class CrawlerUI:
             except Exception:
                 pass
 
-    def on_apply_runtime(self) -> None:
+    def _log_button_click(self, label: str) -> None:
+        """Registra no painel que um botão da interface foi acionado."""
+        self.log_queue.put(f"[UI] botão '{label}' pressionado.")
+
+    def on_apply_runtime(self, log_button: bool = True) -> None:
         """Lê os campos da UI e aplica as mudanças de runtime ao engine."""
+        if log_button:
+            self._log_button_click("Aplicar runtime")
         rt = self.cfg_mgr.data["runtime"]
         rt["max_threads"] = int(self.var_threads.get())
         rt["requests_per_minute"] = int(self.var_rpm.get())
@@ -1161,12 +1445,14 @@ class CrawlerUI:
 
     def on_save_config(self) -> None:
         """Salva em disco a configuração atualmente exibida na interface."""
-        self.on_apply_runtime()
+        self._log_button_click("Salvar config")
+        self.on_apply_runtime(log_button=False)
         self.cfg_mgr.save()
         self.log_queue.put("[CONFIG] arquivo de configuração salvo.")
 
     def on_seed_from_config(self) -> None:
         """Recarrega o JSON e popula a base com jogos e seeds definidos na configuração."""
+        self._log_button_click("Criar base da config")
         self.cfg_mgr.reload()
         self.var_threads.set(self.cfg_mgr.runtime.max_threads)
         self.var_rpm.set(self.cfg_mgr.runtime.requests_per_minute)
@@ -1182,29 +1468,38 @@ class CrawlerUI:
 
     def on_start(self) -> None:
         """Inicia o crawler usando os valores atuais de configuração."""
-        self.on_apply_runtime()
+        self._log_button_click("Iniciar")
+        self.on_apply_runtime(log_button=False)
         if not self.db.has_seed_data():
             ensure_storage_dirs(self.cfg_mgr.data)
             self.db.upsert_games_and_seeds(self.cfg_mgr.data["games"])
             self.log_queue.put("[CONFIG] base criada a partir de crawler_config.json antes do início.")
             self._refresh_table()
 
+        promotions = self.db.promote_exhausted_games(self.cfg_mgr.data["games"])
+        for game_name, wiki_url in promotions:
+            self.log_queue.put(f"[FALLBACK] {game_name} mudou para {wiki_url} antes do início.")
+
         self.engine.start()
 
     def on_pause(self) -> None:
         """Pausa o crawl atual sem perder o progresso persistido."""
+        self._log_button_click("Pausar")
         self.engine.pause()
 
     def on_resume(self) -> None:
         """Retoma um crawl pausado anteriormente."""
+        self._log_button_click("Retomar")
         self.engine.resume()
 
     def on_stop(self) -> None:
         """Interrompe os workers e encerra o crawl em andamento."""
+        self._log_button_click("Parar")
         self.engine.stop()
 
     def on_reset(self) -> None:
         """Apaga o estado persistido e os HTMLs salvos para recomeçar do zero."""
+        self._log_button_click("Resetar base")
         confirmed = messagebox.askyesno(
             "Resetar base",
             "Isso vai apagar o banco SQLite e todos os HTMLs em 'wikis/'. Deseja continuar?",

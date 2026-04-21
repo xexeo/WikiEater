@@ -2,8 +2,8 @@
   "runtime": {
     "max_threads": 2,
     "requests_per_minute": 30,
-    "bypass_robots": false,
-    "render_js_content": false,
+    "bypass_robots": true,
+    "render_js_content": true,
     "max_failures": 2,
     "target_completion_ratio": 0.9,
     "user_agent": "WikiEaterResearchBot/1.0 (+local backup for qualitative research)",
@@ -18,6 +18,20 @@
       "name": "Minecraft",
       "genre": "Sandbox & Survival",
       "wiki_url": "https://minecraft.fandom.com/wiki/Minecraft_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://minecraft.fandom.com/wiki/Minecraft_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        },
+        {
+          "wiki_url": "https://minecraft.wiki/w/Minecraft_Wiki",
+          "seed_paths": [
+            "/w/Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Items"
       ]
@@ -26,6 +40,20 @@
       "name": "Terraria",
       "genre": "Sandbox & Survival",
       "wiki_url": "https://terraria.fandom.com/wiki/Terraria_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://terraria.fandom.com/wiki/Terraria_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        },
+        {
+          "wiki_url": "https://terraria.wiki.gg/wiki/Terraria_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Items"
       ]
@@ -35,13 +63,31 @@
       "genre": "Sandbox & Survival",
       "wiki_url": "https://noita.wiki.gg/wiki/Noita_Wiki",
       "seed_paths": [
-        "/wiki/Items"
+        "/wiki/Items",
+        "/wiki/Noita",
+        "/wiki/Spells",
+        "/wiki/Perks",
+        "/wiki/Wands"
       ]
     },
     {
       "name": "Subnautica",
       "genre": "Sandbox & Survival",
       "wiki_url": "https://subnautica.fandom.com/wiki/Subnautica_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://subnautica.fandom.com/wiki/Subnautica_Wiki",
+          "seed_paths": [
+            "/wiki/Category:Items"
+          ]
+        },
+        {
+          "wiki_url": "https://subnautica.wiki.gg/wiki/Subnautica_Wiki",
+          "seed_paths": [
+            "/wiki/Category:Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Category:Items"
       ]
@@ -50,6 +96,20 @@
       "name": "Valheim",
       "genre": "Sandbox & Survival",
       "wiki_url": "https://valheim.fandom.com/wiki/Valheim_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://valheim.fandom.com/wiki/Valheim_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        },
+        {
+          "wiki_url": "https://valheim.wiki.gg/wiki/Valheim_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Items"
       ]
@@ -59,7 +119,11 @@
       "genre": "RPG",
       "wiki_url": "https://bg3.wiki/wiki/Main_Page",
       "seed_paths": [
-        "/wiki/Items"
+        "/wiki/Items",
+        "/wiki/Equipment",
+        "/wiki/Classes",
+        "/wiki/Spells",
+        "/wiki/Status_effects"
       ]
     },
     {
@@ -83,7 +147,13 @@
       "genre": "RPG",
       "wiki_url": "https://eldenring.wiki.fextralife.com/Elden+Ring+Wiki",
       "seed_paths": [
-        "/Items"
+        "/Items",
+        "/Weapons",
+        "/Armor",
+        "/Classes",
+        "/Skills",
+        "/Bosses",
+        "/Locations"
       ]
     },
     {
@@ -170,6 +240,20 @@
       "name": "Hades",
       "genre": "Roguelike/Lite",
       "wiki_url": "https://hades.fandom.com/wiki/Hades_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://hades.fandom.com/wiki/Hades_Wiki",
+          "seed_paths": [
+            "/wiki/Boons"
+          ]
+        },
+        {
+          "wiki_url": "https://hades.wiki.gg/wiki/Hades_Wiki",
+          "seed_paths": [
+            "/wiki/Boons"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Boons"
       ]
@@ -178,6 +262,20 @@
       "name": "Dead Cells",
       "genre": "Roguelike/Lite",
       "wiki_url": "https://deadcells.fandom.com/wiki/Dead_Cells_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://deadcells.fandom.com/wiki/Dead_Cells_Wiki",
+          "seed_paths": [
+            "/wiki/Category:Items"
+          ]
+        },
+        {
+          "wiki_url": "https://deadcells.wiki.gg/wiki/Dead_Cells_Wiki",
+          "seed_paths": [
+            "/wiki/Category:Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Category:Items"
       ]
@@ -186,6 +284,20 @@
       "name": "Risk of Rain 2",
       "genre": "Roguelike/Lite",
       "wiki_url": "https://riskofrain2.fandom.com/wiki/Risk_of_Rain_2_Wiki",
+      "wiki_options": [
+        {
+          "wiki_url": "https://riskofrain2.fandom.com/wiki/Risk_of_Rain_2_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        },
+        {
+          "wiki_url": "https://riskofrain2.wiki.gg/wiki/Risk_of_Rain_2_Wiki",
+          "seed_paths": [
+            "/wiki/Items"
+          ]
+        }
+      ],
       "seed_paths": [
         "/wiki/Items"
       ]
@@ -243,7 +355,11 @@
       "genre": "Management/Automation",
       "wiki_url": "https://wiki.factorio.com/Main_Page",
       "seed_paths": [
-        "/Items"
+        "/Items",
+        "/Recipes",
+        "/Technologies",
+        "/Weapons",
+        "/Science_pack"
       ]
     },
     {
@@ -251,7 +367,11 @@
       "genre": "Management/Automation",
       "wiki_url": "https://satisfactory.wiki.gg/wiki/Satisfactory_Wiki",
       "seed_paths": [
-        "/wiki/Items"
+        "/wiki/Items",
+        "/wiki/Buildings",
+        "/wiki/Equipment",
+        "/wiki/Vehicles",
+        "/wiki/Crafting"
       ]
     },
     {

@@ -1,0 +1,56 @@
+{
+  "runtime": {
+    "max_threads": 2,
+    "requests_per_minute": 30,
+    "bypass_robots": false,
+    "target_completion_ratio": 0.9,
+    "user_agent": "WikiEaterResearchBot/1.0 (+local backup for qualitative research)",
+    "request_timeout_s": 20,
+    "retry_limit": 3
+  },
+  "storage": {
+    "root_dir": "wikis"
+  },
+  "games": [
+    {"name": "Minecraft", "genre": "Sandbox & Survival", "wiki_url": "https://minecraft.fandom.com/wiki/Minecraft_Wiki", "seed_paths": ["/wiki/Items"]},
+    {"name": "Terraria", "genre": "Sandbox & Survival", "wiki_url": "https://terraria.fandom.com/wiki/Terraria_Wiki", "seed_paths": ["/wiki/Items"]},
+    {"name": "Noita", "genre": "Sandbox & Survival", "wiki_url": "https://noita.wiki.gg/wiki/Noita_Wiki", "seed_paths": ["/wiki/Items"]},
+    {"name": "Subnautica", "genre": "Sandbox & Survival", "wiki_url": "https://subnautica.fandom.com/wiki/Subnautica_Wiki", "seed_paths": ["/wiki/Category:Items"]},
+    {"name": "Valheim", "genre": "Sandbox & Survival", "wiki_url": "https://valheim.fandom.com/wiki/Valheim_Wiki", "seed_paths": ["/wiki/Items"]},
+
+    {"name": "Baldur's Gate 3", "genre": "RPG", "wiki_url": "https://bg3.wiki/wiki/Main_Page", "seed_paths": ["/wiki/Items"]},
+    {"name": "The Witcher 3", "genre": "RPG", "wiki_url": "https://witcher.fandom.com/wiki/The_Witcher_3:_Wild_Hunt", "seed_paths": ["/wiki/Category:The_Witcher_3_items"]},
+    {"name": "Skyrim", "genre": "RPG", "wiki_url": "https://elderscrolls.fandom.com/wiki/The_Elder_Scrolls_V:_Skyrim", "seed_paths": ["/wiki/Items_(Skyrim)"]},
+    {"name": "Elden Ring", "genre": "RPG", "wiki_url": "https://eldenring.wiki.fextralife.com/Elden+Ring+Wiki", "seed_paths": ["/Items"]},
+    {"name": "Fallout 4", "genre": "RPG", "wiki_url": "https://fallout.fandom.com/wiki/Fallout_4", "seed_paths": ["/wiki/Fallout_4_items"]},
+
+    {"name": "Zelda: BOTW", "genre": "Action & Adventure", "wiki_url": "https://zelda.fandom.com/wiki/The_Legend_of_Zelda:_Breath_of_the_Wild", "seed_paths": ["/wiki/Items_in_Breath_of_the_Wild"]},
+    {"name": "Assassin's Creed Valhalla", "genre": "Action & Adventure", "wiki_url": "https://assassinscreed.fandom.com/wiki/Assassin%27s_Creed:_Valhalla", "seed_paths": ["/wiki/Category:Assassin%27s_Creed:_Valhalla_items"]},
+    {"name": "God of War (2018)", "genre": "Action & Adventure", "wiki_url": "https://godofwar.fandom.com/wiki/God_of_War_(2018)", "seed_paths": ["/wiki/Items"]},
+
+    {"name": "Doom Eternal", "genre": "Shooters", "wiki_url": "https://doom.fandom.com/wiki/Doom_Eternal", "seed_paths": ["/wiki/Category:Doom_Eternal_weapons"]},
+    {"name": "Quake", "genre": "Shooters", "wiki_url": "https://quake.fandom.com/wiki/Quake_Wiki", "seed_paths": ["/wiki/Weapons"]},
+    {"name": "Halo Infinite", "genre": "Shooters", "wiki_url": "https://halo.fandom.com/wiki/Halo_Infinite", "seed_paths": ["/wiki/Category:Halo_Infinite_weapons"]},
+    {"name": "Call of Duty Warzone", "genre": "Shooters", "wiki_url": "https://callofduty.fandom.com/wiki/Call_of_Duty:_Warzone", "seed_paths": ["/wiki/Category:Call_of_Duty:_Warzone_weapons"]},
+    {"name": "Borderlands 3", "genre": "Shooters", "wiki_url": "https://borderlands.fandom.com/wiki/Borderlands_3", "seed_paths": ["/wiki/Weapons"]},
+
+    {"name": "Crypt of the NecroDancer", "genre": "Roguelike/Lite", "wiki_url": "https://crypt-of-the-necrodancer.fandom.com/wiki/Crypt_of_the_NecroDancer_Wiki", "seed_paths": ["/wiki/Items"]},
+    {"name": "Hades", "genre": "Roguelike/Lite", "wiki_url": "https://hades.fandom.com/wiki/Hades_Wiki", "seed_paths": ["/wiki/Boons"]},
+    {"name": "Dead Cells", "genre": "Roguelike/Lite", "wiki_url": "https://deadcells.fandom.com/wiki/Dead_Cells_Wiki", "seed_paths": ["/wiki/Category:Items"]},
+    {"name": "Risk of Rain 2", "genre": "Roguelike/Lite", "wiki_url": "https://riskofrain2.fandom.com/wiki/Risk_of_Rain_2_Wiki", "seed_paths": ["/wiki/Items"]},
+
+    {"name": "Resident Evil Village", "genre": "Horror/Survival Horror", "wiki_url": "https://residentevil.fandom.com/wiki/Resident_Evil_Village", "seed_paths": ["/wiki/Category:Resident_Evil_Village_items"]},
+    {"name": "Silent Hill 2", "genre": "Horror/Survival Horror", "wiki_url": "https://silenthill.fandom.com/wiki/Silent_Hill_2", "seed_paths": ["/wiki/Category:Silent_Hill_2_items"]},
+    {"name": "Amnesia: The Bunker", "genre": "Horror/Survival Horror", "wiki_url": "https://amnesia.fandom.com/wiki/Amnesia:_The_Bunker", "seed_paths": ["/wiki/Items"]},
+
+    {"name": "Deus Ex: Mankind Divided", "genre": "Immersive Sims", "wiki_url": "https://deusex.fandom.com/wiki/Deus_Ex:_Mankind_Divided", "seed_paths": ["/wiki/Weapons"]},
+    {"name": "Prey (2017)", "genre": "Immersive Sims", "wiki_url": "https://prey.fandom.com/wiki/Prey_(2017)", "seed_paths": ["/wiki/Category:Prey_(2017)_items"]},
+    {"name": "Dishonored 2", "genre": "Immersive Sims", "wiki_url": "https://dishonored.fandom.com/wiki/Dishonored_2", "seed_paths": ["/wiki/Category:Dishonored_2_items"]},
+
+    {"name": "Factorio", "genre": "Management/Automation", "wiki_url": "https://wiki.factorio.com/Main_Page", "seed_paths": ["/Items"]},
+    {"name": "Satisfactory", "genre": "Management/Automation", "wiki_url": "https://satisfactory.wiki.gg/wiki/Satisfactory_Wiki", "seed_paths": ["/wiki/Items"]},
+
+    {"name": "Metal Gear Solid V", "genre": "Stealth/Tactical", "wiki_url": "https://metalgear.fandom.com/wiki/Metal_Gear_Solid_V:_The_Phantom_Pain", "seed_paths": ["/wiki/Category:Metal_Gear_Solid_V:_The_Phantom_Pain_weapons"]},
+    {"name": "Hitman 3", "genre": "Stealth/Tactical", "wiki_url": "https://hitman.fandom.com/wiki/HITMAN_3", "seed_paths": ["/wiki/Category:HITMAN_3_items"]}
+  ]
+}

@@ -60,6 +60,9 @@ cover/
 local_settings.py
 db.sqlite3
 db.sqlite3-journal
+wikieater.sqlite3
+wikieater.sqlite3-*
+wikis/
 
 # Flask stuff:
 instance/
